@@ -1,9 +1,16 @@
 package registry
 
 import (
+	"hash/fnv"
 	"log"
 	"sync"
 	"time"
+)
+
+const (
+	// numShards is the number of shards for the sharded map
+	// Using a power of 2 (16) allows efficient modulo operation via bitwise AND
+	numShards = 16
 )
 
 type NodeInfo struct {
@@ -17,26 +24,48 @@ type NodeInfo struct {
 	RTT         time.Duration // Calculated round-trip time
 }
 
-type Monitor struct {
+// shard represents a single shard of the sharded map
+type shard struct {
 	nodes map[string]NodeInfo
 	mu    sync.RWMutex
 }
 
-// NewMonitor creates a new monitor instance
+// Monitor uses a sharded map to reduce lock contention
+// Operations on different shards can proceed concurrently
+type Monitor struct {
+	shards [numShards]*shard
+}
+
+// NewMonitor creates a new monitor instance with sharded map
 func NewMonitor() *Monitor {
-	return &Monitor{
-		nodes: make(map[string]NodeInfo),
+	m := &Monitor{}
+	for i := 0; i < numShards; i++ {
+		m.shards[i] = &shard{
+			nodes: make(map[string]NodeInfo),
+		}
 	}
+	return m
+}
+
+// getShard returns the shard for a given address
+// Uses FNV-1a hash for good distribution
+func (m *Monitor) getShard(addr string) *shard {
+	h := fnv.New32a()
+	h.Write([]byte(addr))
+	// Use bitwise AND instead of modulo for efficiency (numShards is power of 2)
+	shardIndex := h.Sum32() & (numShards - 1)
+	return m.shards[shardIndex]
 }
 
 // Update updates the heartbeat for a node
 func (m *Monitor) Update(addr string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.nodes == nil {
-		m.nodes = make(map[string]NodeInfo)
+	shard := m.getShard(addr)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	if shard.nodes == nil {
+		shard.nodes = make(map[string]NodeInfo)
 	}
-	m.nodes[addr] = NodeInfo{
+	shard.nodes[addr] = NodeInfo{
 		LastSeen: time.Now(),
 		Address:  addr,
 	}
@@ -45,14 +74,15 @@ func (m *Monitor) Update(addr string) {
 // UpdateWithStatus updates the heartbeat with status code and timestamp
 // Uses local time.Now() for LastSeen to handle clock skew, but stores packet timestamp for RTT
 func (m *Monitor) UpdateWithStatus(addr string, statusCode uint8, packetTimestamp int64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.nodes == nil {
-		m.nodes = make(map[string]NodeInfo)
+	shard := m.getShard(addr)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	if shard.nodes == nil {
+		shard.nodes = make(map[string]NodeInfo)
 	}
 
 	now := time.Now()
-	info := m.nodes[addr]
+	info := shard.nodes[addr]
 
 	// Use local time for LastSeen to handle clock skew between nodes
 	// This ensures reaper logic works correctly even with time differences
@@ -70,17 +100,18 @@ func (m *Monitor) UpdateWithStatus(addr string, statusCode uint8, packetTimestam
 		// In a production system, you might implement echo packets for true RTT
 	}
 
-	m.nodes[addr] = info
+	shard.nodes[addr] = info
 }
 
 // UpdateWithTelemetry updates the heartbeat with full telemetry data
 func (m *Monitor) UpdateWithTelemetry(addr string, cpuPercent, ramPercent, diskPercent float64, statusCode uint8) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.nodes == nil {
-		m.nodes = make(map[string]NodeInfo)
+	shard := m.getShard(addr)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	if shard.nodes == nil {
+		shard.nodes = make(map[string]NodeInfo)
 	}
-	m.nodes[addr] = NodeInfo{
+	shard.nodes[addr] = NodeInfo{
 		LastSeen:    time.Now(),
 		Address:     addr,
 		CPUPercent:  cpuPercent,
@@ -90,44 +121,60 @@ func (m *Monitor) UpdateWithTelemetry(addr string, cpuPercent, ramPercent, diskP
 	}
 }
 
-// GetNodes returns a copy of all known nodes
+// GetNodes returns a copy of all known nodes from all shards
 func (m *Monitor) GetNodes() map[string]NodeInfo {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	// Lock all shards for reading (could be optimized with concurrent reads)
+	result := make(map[string]NodeInfo)
 
-	result := make(map[string]NodeInfo, len(m.nodes))
-	for k, v := range m.nodes {
-		result[k] = v
+	for i := 0; i < numShards; i++ {
+		shard := m.shards[i]
+		shard.mu.RLock()
+		for k, v := range shard.nodes {
+			result[k] = v
+		}
+		shard.mu.RUnlock()
 	}
+
 	return result
 }
 
-// GetNodeCount returns the number of active nodes
+// GetNodeCount returns the total number of active nodes across all shards
 func (m *Monitor) GetNodeCount() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.nodes)
+	total := 0
+	for i := 0; i < numShards; i++ {
+		shard := m.shards[i]
+		shard.mu.RLock()
+		total += len(shard.nodes)
+		shard.mu.RUnlock()
+	}
+	return total
 }
 
 // GetNodeInfo returns information about a specific node
 func (m *Monitor) GetNodeInfo(addr string) (NodeInfo, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	info, ok := m.nodes[addr]
+	shard := m.getShard(addr)
+	shard.mu.RLock()
+	defer shard.mu.RUnlock()
+	info, ok := shard.nodes[addr]
 	return info, ok
 }
 
 // StartReaper runs in a goroutine to remove stale nodes
+// With sharded map, reaper processes each shard independently, reducing lock contention
 func (m *Monitor) StartReaper(interval time.Duration, timeout time.Duration) {
 	ticker := time.NewTicker(interval)
 	for range ticker.C {
-		m.mu.Lock()
-		for addr, info := range m.nodes {
-			if time.Since(info.LastSeen) > timeout {
-				delete(m.nodes, addr)
-				log.Printf("Node %s timed out", addr)
+		// Process each shard independently - allows concurrent operations on other shards
+		for i := 0; i < numShards; i++ {
+			shard := m.shards[i]
+			shard.mu.Lock()
+			for addr, info := range shard.nodes {
+				if time.Since(info.LastSeen) > timeout {
+					delete(shard.nodes, addr)
+					log.Printf("Node %s timed out", addr)
+				}
 			}
+			shard.mu.Unlock()
 		}
-		m.mu.Unlock()
 	}
 }
