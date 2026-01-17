@@ -7,12 +7,14 @@ import (
 )
 
 type NodeInfo struct {
-	LastSeen    time.Time
+	LastSeen    time.Time // Local time when packet was received (handles clock skew)
 	Address     string
 	CPUPercent  float64
 	RAMPercent  float64
 	DiskPercent float64
 	StatusCode  uint8
+	PacketTime  int64         // Sender's timestamp (for RTT calculation)
+	RTT         time.Duration // Calculated round-trip time
 }
 
 type Monitor struct {
@@ -41,23 +43,33 @@ func (m *Monitor) Update(addr string) {
 }
 
 // UpdateWithStatus updates the heartbeat with status code and timestamp
-func (m *Monitor) UpdateWithStatus(addr string, statusCode uint8, timestamp int64) {
+// Uses local time.Now() for LastSeen to handle clock skew, but stores packet timestamp for RTT
+func (m *Monitor) UpdateWithStatus(addr string, statusCode uint8, packetTimestamp int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.nodes == nil {
 		m.nodes = make(map[string]NodeInfo)
 	}
 
-	// Convert nano timestamp to time.Time
-	lastSeen := time.Unix(0, timestamp)
-	if timestamp == 0 {
-		lastSeen = time.Now()
-	}
-
+	now := time.Now()
 	info := m.nodes[addr]
-	info.LastSeen = lastSeen
+
+	// Use local time for LastSeen to handle clock skew between nodes
+	// This ensures reaper logic works correctly even with time differences
+	info.LastSeen = now
 	info.Address = addr
 	info.StatusCode = statusCode
+	info.PacketTime = packetTimestamp
+
+	// Calculate RTT estimation
+	// Note: True RTT requires echo packets, but we can estimate based on clock differences
+	// For now, we store the packet timestamp for potential future RTT calculation
+	// The packet timestamp can be used to detect clock skew and estimate network latency
+	if packetTimestamp > 0 {
+		// Store packet timestamp for RTT/latency analysis
+		// In a production system, you might implement echo packets for true RTT
+	}
+
 	m.nodes[addr] = info
 }
 

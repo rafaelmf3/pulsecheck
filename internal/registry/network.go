@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"runtime"
@@ -190,6 +191,36 @@ func (u *UDPNode) BroadcastHeartbeat(statusCode uint8) error {
 		}
 	}
 	
+	return nil
+}
+
+// SendToSeedNode sends a heartbeat to a seed node to bootstrap peer discovery
+// This allows a new node to "check in" with a known stable IP
+func (u *UDPNode) SendToSeedNode(seedAddr string, statusCode uint8) error {
+	addr, err := net.ResolveUDPAddr("udp", seedAddr)
+	if err != nil {
+		return fmt.Errorf("invalid seed node address: %w", err)
+	}
+	
+	pkt := protocol.NewPacket(u.nodeUUID, statusCode)
+	data, err := pkt.Encode()
+	if err != nil {
+		return err
+	}
+	
+	_, err = u.conn.WriteToUDP(data, addr)
+	if err != nil {
+		return fmt.Errorf("failed to send to seed node: %w", err)
+	}
+	
+	// Add seed node as a peer so we'll receive its heartbeats
+	// and discover other peers through it
+	addrStr := addr.String()
+	u.peersMu.Lock()
+	u.peers[addrStr] = addr
+	u.peersMu.Unlock()
+	
+	log.Printf("Sent heartbeat to seed node: %s", seedAddr)
 	return nil
 }
 

@@ -20,6 +20,7 @@ func main() {
 	heartbeatInterval := flag.Duration("heartbeat-interval", 5*time.Second, "Time between heartbeats")
 	timeout := flag.Duration("timeout", 15*time.Second, "Time before marking node offline")
 	nodeID := flag.String("node-id", "", "Unique identifier for this node (default: hostname)")
+	seedNode := flag.String("seed-node", "", "Seed node address (e.g., 192.168.1.100:9999) for peer discovery")
 	
 	// Telemetry thresholds
 	cpuWarn := flag.Float64("cpu-warn-threshold", 70.0, "CPU percentage for Warn status")
@@ -56,6 +57,25 @@ func main() {
 	// Start UDP listener in background
 	go udpNode.Start()
 	
+	// Connect to seed node if provided (for peer discovery)
+	if *seedNode != "" {
+		// Collect initial metrics for seed node connection
+		metrics, err := telemetry.CollectMetrics()
+		if err != nil {
+			log.Printf("Warning: Failed to collect metrics for seed node: %v", err)
+			metrics = &telemetry.Metrics{} // Use zero values
+		}
+		statusCode := telemetry.CalculateStatus(metrics, thresholds)
+		
+		// Send initial heartbeat to seed node
+		if err := udpNode.SendToSeedNode(*seedNode, uint8(statusCode)); err != nil {
+			log.Printf("Warning: Failed to connect to seed node %s: %v", *seedNode, err)
+			log.Println("Continuing without seed node - peer discovery may be limited")
+		} else {
+			log.Printf("Connected to seed node: %s", *seedNode)
+		}
+	}
+	
 	// Start reaper goroutine
 	go monitor.StartReaper(1*time.Second, *timeout)
 	
@@ -73,6 +93,9 @@ func main() {
 	
 	log.Printf("PulseCheck node started (UUID: %x, Port: %d)", nodeUUID, *port)
 	log.Printf("Heartbeat interval: %v, Timeout: %v", *heartbeatInterval, *timeout)
+	if *seedNode != "" {
+		log.Printf("Seed node: %s", *seedNode)
+	}
 	
 	// Main loop
 	for {
@@ -176,6 +199,9 @@ func displayStatus(monitor *registry.Monitor) {
 		if info.CPUPercent > 0 || info.RAMPercent > 0 || info.DiskPercent > 0 {
 			fmt.Printf(" | CPU: %.1f%% RAM: %.1f%% Disk: %.1f%%", 
 				info.CPUPercent, info.RAMPercent, info.DiskPercent)
+		}
+		if info.RTT > 0 {
+			fmt.Printf(" | RTT: %v", info.RTT.Round(time.Millisecond))
 		}
 		fmt.Println()
 	}
