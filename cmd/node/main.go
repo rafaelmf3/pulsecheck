@@ -3,13 +3,13 @@ package main
 import (
 	"crypto/rand"
 	"flag"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/rafaelmarinho/pulsecheck/internal/display"
 	"github.com/rafaelmarinho/pulsecheck/internal/registry"
 	"github.com/rafaelmarinho/pulsecheck/internal/telemetry"
 )
@@ -21,6 +21,7 @@ func main() {
 	timeout := flag.Duration("timeout", 15*time.Second, "Time before marking node offline")
 	nodeID := flag.String("node-id", "", "Unique identifier for this node (default: hostname)")
 	seedNode := flag.String("seed-node", "", "Seed node address (e.g., 192.168.1.100:9999) for peer discovery")
+	jsonOutput := flag.Bool("json", false, "Output status in JSON format (for tool consumption)")
 	
 	// Telemetry thresholds
 	cpuWarn := flag.Float64("cpu-warn-threshold", 70.0, "CPU percentage for Warn status")
@@ -79,6 +80,11 @@ func main() {
 	// Start reaper goroutine
 	go monitor.StartReaper(1*time.Second, *timeout)
 	
+	// Initialize status reporter
+	reporter := display.NewReporter(monitor, *jsonOutput)
+	go reporter.Start(10 * time.Second)
+	defer reporter.Stop()
+	
 	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -87,17 +93,16 @@ func main() {
 	heartbeatTicker := time.NewTicker(*heartbeatInterval)
 	defer heartbeatTicker.Stop()
 	
-	// Start status display ticker
-	statusTicker := time.NewTicker(10 * time.Second)
-	defer statusTicker.Stop()
-	
 	log.Printf("PulseCheck node started (UUID: %x, Port: %d)", nodeUUID, *port)
 	log.Printf("Heartbeat interval: %v, Timeout: %v", *heartbeatInterval, *timeout)
 	if *seedNode != "" {
 		log.Printf("Seed node: %s", *seedNode)
 	}
+	if *jsonOutput {
+		log.Println("JSON output mode enabled")
+	}
 	
-	// Main loop
+	// Main loop - handles heartbeat and shutdown
 	for {
 		select {
 		case <-sigChan:
@@ -130,10 +135,6 @@ func main() {
 			if err := udpNode.BroadcastHeartbeat(uint8(statusCode)); err != nil {
 				log.Printf("Failed to broadcast heartbeat: %v", err)
 			}
-			
-		case <-statusTicker.C:
-			// Display status
-			displayStatus(monitor)
 		}
 	}
 }
@@ -173,36 +174,3 @@ func simpleHash(s string) []byte {
 	return hash
 }
 
-// displayStatus displays the current status of all nodes
-func displayStatus(monitor *registry.Monitor) {
-	nodes := monitor.GetNodes()
-	count := monitor.GetNodeCount()
-	
-	fmt.Printf("\n=== PulseCheck Status (Nodes: %d) ===\n", count)
-	
-	if count == 0 {
-		fmt.Println("No active nodes")
-		return
-	}
-	
-	for addr, info := range nodes {
-		statusStr := "OK"
-		switch info.StatusCode {
-		case 1:
-			statusStr = "WARN"
-		case 2:
-			statusStr = "CRITICAL"
-		}
-		
-		age := time.Since(info.LastSeen)
-		fmt.Printf("Node: %s | Status: %s | Age: %v", addr, statusStr, age.Round(time.Second))
-		if info.CPUPercent > 0 || info.RAMPercent > 0 || info.DiskPercent > 0 {
-			fmt.Printf(" | CPU: %.1f%% RAM: %.1f%% Disk: %.1f%%", 
-				info.CPUPercent, info.RAMPercent, info.DiskPercent)
-		}
-		if info.RTT > 0 {
-			fmt.Printf(" | RTT: %v", info.RTT.Round(time.Millisecond))
-		}
-		fmt.Println()
-	}
-}

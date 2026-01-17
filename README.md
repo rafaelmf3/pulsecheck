@@ -181,6 +181,15 @@ go build -o bin/pulsecheck ./cmd/node
 | `--disk-warn-threshold` | 85.0 | Disk percentage for Warn status |
 | `--disk-critical-threshold` | 95.0 | Disk percentage for Critical status |
 
+### Running Tests & Race Detection
+
+Since this system relies heavily on concurrent map access and background workers, it is tested with Go's race detector to ensure thread safety.
+
+```bash
+# Run all tests with the race detector enabled
+go test -v -race ./...
+```
+
 ## 5. Technical Deep Dive
 
 ### Packet Encoding/Decoding
