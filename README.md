@@ -26,15 +26,18 @@ Unlike TCP, UDP is connectionless. This allows nodes to "fire and forget" heartb
 
 To save bandwidth and reduce GC (Garbage Collection) pressure, I implemented a custom binary protocol.
 
-**Packet Structure (26 Bytes):**
+**Packet Structure (30 Bytes):**
 ```
 [0]      uint8:   Version (for backward compatibility)
 [1-16]   [16]byte: Node UUID
 [17-24]  int64:   Unix Nano Timestamp (for RTT/Latency tracking)
 [25]     uint8:   Status Code (0: OK, 1: Warn, 2: Critical)
+[26-29]  uint32:  CRC32 Checksum (for packet integrity verification)
 ```
 
-**Why 26 bytes?** A typical JSON health check payload is 200-500 bytes. Our binary protocol is **92-95% smaller**, reducing network bandwidth and GC pressure when monitoring thousands of nodes.
+**Why 30 bytes?** A typical JSON health check payload is 200-500 bytes. Our binary protocol is **90-94% smaller**, reducing network bandwidth and GC pressure when monitoring thousands of nodes.
+
+**Checksum Protection:** The CRC32 checksum ensures packet integrity at the application layer. UDP provides no reliability guarantees, so corrupted packets are detected and discarded, preventing invalid data from affecting the health monitoring system.
 
 ### The "Reaper" Pattern
 
@@ -71,7 +74,7 @@ graph TB
         
         TC1 -->|CPU/RAM/Disk| SC1
         SC1 -->|Status Code| PE1
-        PE1 -->|26-byte packet| US1
+        PE1 -->|30-byte packet| US1
         UL1 -->|Receive| PD1
         PD1 -->|Update| MON1
         REP1 -->|Cleanup| MON1
@@ -89,7 +92,7 @@ graph TB
         
         TC2 -->|CPU/RAM/Disk| SC2
         SC2 -->|Status Code| PE2
-        PE2 -->|26-byte packet| US2
+        PE2 -->|30-byte packet| US2
         UL2 -->|Receive| PD2
         PD2 -->|Update| MON2
         REP2 -->|Cleanup| MON2
@@ -103,7 +106,7 @@ graph TB
 
 1. **Telemetry Collection:** Each node periodically collects CPU, RAM, and disk metrics
 2. **Status Calculation:** Metrics are compared against configurable thresholds to determine status code
-3. **Packet Encoding:** Status code, node UUID, and timestamp are packed into a 26-byte binary packet
+3. **Packet Encoding:** Status code, node UUID, and timestamp are packed into a 30-byte binary packet (26 bytes data + 4 bytes CRC32 checksum)
 4. **UDP Broadcast:** Packet is sent to all known peers via UDP
 5. **Packet Reception:** Non-blocking UDP listener receives packets in goroutines
 6. **Registry Update:** Decoded packets update the monitor registry with node status
@@ -185,13 +188,20 @@ go build -o bin/pulsecheck ./cmd/node
 The packet uses `encoding/binary` with `binary.BigEndian` (network byte order) for cross-platform compatibility:
 
 ```go
-// Encoding: Pack fields into 26-byte buffer
+// Encoding: Pack fields into 30-byte buffer (26 bytes data + 4 bytes CRC32)
 buf[0] = version
 copy(buf[1:17], nodeUUID[:])
 binary.BigEndian.PutUint64(buf[17:25], uint64(timestamp))
 buf[25] = statusCode
+checksum := crc32.ChecksumIEEE(buf[0:26])
+binary.BigEndian.PutUint32(buf[26:30], checksum)
 
-// Decoding: Unpack 26-byte buffer
+// Decoding: Unpack 30-byte buffer and verify checksum
+receivedChecksum := binary.BigEndian.Uint32(buf[26:30])
+expectedChecksum := crc32.ChecksumIEEE(buf[0:26])
+if receivedChecksum != expectedChecksum {
+    return error("packet corrupted")
+}
 version = buf[0]
 copy(nodeUUID[:], buf[1:17])
 timestamp = int64(binary.BigEndian.Uint64(buf[17:25]))
@@ -215,13 +225,13 @@ The `Monitor` struct uses `sync.RWMutex` to protect the nodes map:
 
 **Memory Overhead:** Low. Per-node storage:
 - NodeInfo struct: ~100 bytes
-- Packet buffer: 26 bytes (reused)
+- Packet buffer: 30 bytes (reused)
 - Total per 1000 nodes: ~100 KB
 
 **Network Bandwidth:** Ultra-low. Each heartbeat:
-- 26 bytes per packet
-- Default 5s interval = 5.2 bytes/second per node
-- 1000 nodes = ~5.2 KB/second total
+- 30 bytes per packet (26 bytes data + 4 bytes CRC32)
+- Default 5s interval = 6 bytes/second per node
+- 1000 nodes = ~6 KB/second total
 
 ### Telemetry Collection Methodology
 
@@ -239,11 +249,12 @@ Metrics are collected synchronously during heartbeat generation to ensure consis
 |----------|-----------|
 | **UDP over TCP** | Connectionless, no handshake overhead, suitable for high-frequency heartbeats |
 | **Binary over JSON** | 92-95% smaller packets, reduced GC pressure, lower bandwidth |
-| **26-byte fixed size** | Predictable packet size, easy validation, minimal parsing overhead |
+| **30-byte fixed size** | Predictable packet size, easy validation, minimal parsing overhead |
 | **Non-blocking UDP listener** | Goroutine-per-packet handling prevents blocking, enables high throughput |
 | **Reaper pattern** | Background cleanup prevents memory leaks from stale nodes |
 | **sync.RWMutex** | Allows concurrent reads while protecting writes, optimal for read-heavy workloads |
-| **Telemetry in status code** | Packet stays minimal (26 bytes), full metrics stored in registry for display |
+| **CRC32 Checksum** | 4-byte checksum ensures packet integrity, detects corruption at application layer |
+| **Telemetry in status code** | Packet stays minimal (30 bytes), full metrics stored in registry for display |
 
 ## 7. Future Enhancements
 
