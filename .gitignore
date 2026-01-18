@@ -1,3 +1,18 @@
 bin/
-go.sum
-go.mod
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.html
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Note: go.mod and go.sum should NOT be ignored - they must be committed
