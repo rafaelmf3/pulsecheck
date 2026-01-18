@@ -275,10 +275,21 @@ Potential improvements for production use:
 - **Persistent Storage:** Optional database backend for historical health data
 - **Web Dashboard:** Real-time visualization of node health and telemetry
 
-## License
+### License
+For an open-source portfolio, the **MIT License** is the industry standard. It says, "You can do whatever you want with this code, just don't sue me." It shows you understand how the open-source ecosystem works.
 
-[Your License Here]
+**Create a file named `LICENSE` in the root and paste this:**
+```text
+MIT License
 
-## Contributing
+Copyright (c) 2026 Rafael Marinho
 
-[Your Contributing Guidelines Here]
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
