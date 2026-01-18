@@ -3,6 +3,7 @@ package display
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 type Reporter struct {
 	monitor   *registry.Monitor
 	jsonMode  bool
-	output    *os.File
+	output    io.Writer
 	stopChan  chan struct{}
 }
 

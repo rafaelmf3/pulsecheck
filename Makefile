@@ -1,4 +1,4 @@
-.PHONY: build test clean run
+.PHONY: build test test-unit test-integration clean run deps simulator-up simulator-down simulator-logs simulator-clean
 
 # Build the application
 build:
@@ -8,19 +8,43 @@ build:
 run: build
 	./bin/pulsecheck
 
-# Run tests
-test:
-	go test ./...
+# Run all tests
+test: test-unit
 
-# Run tests with coverage
-test-coverage:
-	go test -cover ./...
+# Run unit tests
+test-unit:
+	go test -v -race -coverprofile=coverage.out ./...
+
+# Run unit tests with coverage report
+test-coverage: test-unit
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
+
+# Run integration tests (requires Docker)
+test-integration:
+	@echo "Starting integration tests..."
+	go test -v ./test/integration/...
 
 # Clean build artifacts
 clean:
 	rm -rf bin/
+	rm -f coverage.out coverage.html
 
 # Install dependencies
 deps:
 	go mod download
 	go mod tidy
+
+# Docker Compose simulator commands
+simulator-up:
+	docker-compose -f docker-compose.yml up -d --build
+
+simulator-down:
+	docker-compose -f docker-compose.yml down
+
+simulator-logs:
+	docker-compose -f docker-compose.yml logs -f
+
+simulator-clean: simulator-down
+	docker-compose -f docker-compose.yml down -v
+	docker system prune -f

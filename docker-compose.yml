@@ -1,0 +1,114 @@
+services:
+  seed-node:
+    build:
+      context: .
+      dockerfile: test/simulator/Dockerfile
+    container_name: pulsecheck-seed
+    environment:
+      - PORT=9999
+      - HEARTBEAT_INTERVAL=5s
+      - TIMEOUT=15s
+      - NODE_ID=seed-node
+    ports:
+      - "9999:9999/udp"
+    networks:
+      - pulsecheck-net
+    healthcheck:
+      test: ["CMD", "nc", "-u", "-z", "localhost", "9999"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  node-1:
+    build:
+      context: .
+      dockerfile: test/simulator/Dockerfile
+    container_name: pulsecheck-node-1
+    environment:
+      - PORT=10001
+      - HEARTBEAT_INTERVAL=5s
+      - TIMEOUT=15s
+      - NODE_ID=node-1
+      - SEED_NODE=seed-node:9999
+    ports:
+      - "10001:10001/udp"
+    networks:
+      - pulsecheck-net
+    depends_on:
+      - seed-node
+
+  node-2:
+    build:
+      context: .
+      dockerfile: test/simulator/Dockerfile
+    container_name: pulsecheck-node-2
+    environment:
+      - PORT=10002
+      - HEARTBEAT_INTERVAL=5s
+      - TIMEOUT=15s
+      - NODE_ID=node-2
+      - SEED_NODE=seed-node:9999
+    ports:
+      - "10002:10002/udp"
+    networks:
+      - pulsecheck-net
+    depends_on:
+      - seed-node
+
+  node-3:
+    build:
+      context: .
+      dockerfile: test/simulator/Dockerfile
+    container_name: pulsecheck-node-3
+    environment:
+      - PORT=10003
+      - HEARTBEAT_INTERVAL=5s
+      - TIMEOUT=15s
+      - NODE_ID=node-3
+      - SEED_NODE=seed-node:9999
+    ports:
+      - "10003:10003/udp"
+    networks:
+      - pulsecheck-net
+    depends_on:
+      - seed-node
+
+  node-4:
+    build:
+      context: .
+      dockerfile: test/simulator/Dockerfile
+    container_name: pulsecheck-node-4
+    environment:
+      - PORT=10004
+      - HEARTBEAT_INTERVAL=5s
+      - TIMEOUT=15s
+      - NODE_ID=node-4
+      - SEED_NODE=seed-node:9999
+    ports:
+      - "10004:10004/udp"
+    networks:
+      - pulsecheck-net
+    depends_on:
+      - seed-node
+
+  node-5:
+    build:
+      context: .
+      dockerfile: test/simulator/Dockerfile
+    container_name: pulsecheck-node-5
+    environment:
+      - PORT=10005
+      - HEARTBEAT_INTERVAL=5s
+      - TIMEOUT=15s
+      - NODE_ID=node-5
+      - SEED_NODE=seed-node:9999
+    ports:
+      - "10005:10005/udp"
+    networks:
+      - pulsecheck-net
+    depends_on:
+      - seed-node
+
+networks:
+  pulsecheck-net:
+    driver: bridge
